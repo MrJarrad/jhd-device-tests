@@ -8,8 +8,11 @@ Real Mobile Safari in an iOS Simulator (iPhone 16 Pro, iOS 18.x) on a free GitHu
 3. Wait about 7 minutes (one run measured at 6m50s of macOS time). Status without auth:
    `curl -s "https://api.github.com/repos/MrJarrad/jhd-device-tests/actions/runs?per_page=1"` (`status`, `conclusion`, `head_sha`).
 4. Read it: `git fetch origin results/run-<name>-<first 7 of sha>` then `git archive FETCH_HEAD out | tar -x -C <dir>`.
-   Contents of `out/`: numbered `.png` frames (full screen), `walk.mp4` (recording), `trace.json` (tap timestamps and a footer/viewport sample per frame), `walk.log`, `appium.log`, `env.txt` (runtime, Xcode), `summary.txt`.
+   Results are encrypted (previews are behind Access, this repo is public). `out/` holds `results.tar.age` (everything below, sealed to the public key `age-public-key.txt`) and `summary.txt` (outcome only). Decrypt with the private key in the vault, `estate/device-tests/age-private-key.txt` (`apt-get install -y age`):
+   `age -d -i <vault>/estate/device-tests/age-private-key.txt <dir>/out/results.tar.age | tar -x -C <dir>`.
+   Sealed contents: numbered `.png` frames (full screen), `walk.mp4` (recording), `trace.json` (tap timestamps and a footer/viewport sample per frame), `walk.log`, `appium.log`, `env.txt` (runtime, Xcode).
    Extract recording frames with `ffmpeg -i walk.mp4 -vf fps=10 f-%03d.png`.
+   The public Actions log carries no walk output (only URLs, exit code, step names); never add `tee`/`cat` of results to the workflow.
 `request.json` fields: `url`, `card` (href of the project card tapped on Home), `cardWaitMs`, `runtime` (iOS major to prefer), `mechanics` (public-page driver check: `{ "tapText": "..." }`).
 
 ## Previews behind Cloudflare Access

@@ -27,7 +27,13 @@ jobs:
         if: always()
         run: |
           BR="results/${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
-          echo "job-seconds-so-far: $SECONDS  outcome: ${{ steps.walk.outcome }}" > out/summary.txt
+          mkdir -p out
+          # Previews are behind Access: encrypt everything to the public key before it leaves the runner.
+          brew install age >/dev/null 2>&1
+          mkdir -p sealed
+          tar -C out -cf - . | age -R age-public-key.txt -o sealed/results.tar.age
+          echo "outcome: ${{ steps.walk.outcome }}" > sealed/summary.txt
+          rm -rf out; mv sealed out
           git config user.name "device-walk"; git config user.email "device-walk@users.noreply.github.com"
           git checkout --orphan "$BR"; git rm -rf --quiet . 2>/dev/null || true
           git add -f out; git commit -qm "results for $GITHUB_SHA (${{ steps.walk.outcome }})"

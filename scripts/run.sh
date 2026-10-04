@@ -34,8 +34,10 @@ if [ -z "$(node -p "require('./request.json').mechanics?1:''")" ]; then
   [ -n "$CF_AUTH_COOKIE" ] || { echo "ERROR: Access did not return a CF_Authorization cookie (token rejected?)" | tee "$OUT/AUTH-FAILED.txt"; kill $APPIUM_PID; exit 3; }
   echo "::add-mask::$CF_AUTH_COOKIE"; export CF_AUTH_COOKIE
 fi
-node scripts/walk.mjs "$UDID" "$OUT" 2>&1 | tee "$OUT/walk.log"
-RC=${PIPESTATUS[0]}
+# walk output stays in the file (published encrypted); the public Actions log gets no page text
+node scripts/walk.mjs "$UDID" "$OUT" >"$OUT/walk.log" 2>&1
+RC=$?
+echo "walk exit code: $RC"
 # scrub any JWT that appium logged
 sed -i.bak -E "s/eyJ[A-Za-z0-9_.-]{20,}/<redacted>/g" "$OUT"/*.log "$OUT"/trace.json 2>/dev/null; rm -f "$OUT"/*.bak
 kill $APPIUM_PID 2>/dev/null || true
