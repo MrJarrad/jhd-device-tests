@@ -1,9 +1,9 @@
 name: device-walk
-# Trigger: push a branch named run/<anything> (edit request.json on it), or workflow_dispatch.
+# Trigger: push a branch named run/<anything> (edit request.json on it), or workflow_dispatch. Main is not a trigger.
 # Results are committed to branch results/<branch-name> so anyone can `git fetch` them.
 on:
   push:
-    branches: ['run/**', 'main']
+    branches: ['run/**']
     paths: ['request.json', 'scripts/**', '.github/workflows/device-walk.yml']
   workflow_dispatch:
 permissions:
@@ -35,6 +35,8 @@ jobs:
           tar -C out -cf - . | age -R age-public-key.txt -o sealed/results.tar.age
           if [ $(stat -f%z sealed/results.tar.age) -gt 90000000 ]; then split -b 60m sealed/results.tar.age sealed/results.tar.age.part- && rm sealed/results.tar.age; fi  # join: cat results.tar.age.part-* > results.tar.age
           echo "outcome: ${{ steps.walk.outcome }}" > sealed/summary.txt
+          # non-sensitive: target names, verdicts, covered seconds, probe id (no URLs, no page text)
+          if [ -f out/pixel-summary.txt ]; then cat out/pixel-summary.txt >> sealed/summary.txt; else echo "pixel: no verdicts produced" >> sealed/summary.txt; fi
           rm -rf out; mv sealed out
           git config user.name "device-walk"; git config user.email "device-walk@users.noreply.github.com"
           git checkout --orphan "$BR"; git rm -rf --quiet . 2>/dev/null || true

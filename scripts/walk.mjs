@@ -9,8 +9,8 @@ mkdirSync(out, { recursive: true });
 const req = JSON.parse(readFileSync(new URL('../request.json', import.meta.url), 'utf8'));
 const APPIUM = 'http://127.0.0.1:4723';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const trace = { request: req, udid, events: [] };
 const T0 = Date.now();
+const trace = { request: req, udid, t0Wall: T0, events: [] };
 const log = (e) => { trace.events.push({ t: Date.now() - T0, ...e }); console.log(JSON.stringify({ t: Date.now() - T0, ...e })); };
 
 import http from 'node:http';
@@ -51,6 +51,7 @@ let rec;
 const sess = (await wd('POST', '/session', { capabilities: { alwaysMatch: caps } }));
 const sid = sess.sessionId;
 const S = (p) => `/session/${sid}${p}`;
+await wd('POST', S('/timeouts'), { script: 60000 }).catch(() => {});
 const js = (script, args = []) => wd('POST', S('/execute/sync'), { script, args });
 log({ ev: 'session', caps: sess.capabilities });
 
@@ -96,7 +97,7 @@ async function tap(kind, key, label) {
 const INSTALL = `
 const labels = ['Next','Projects','Profile','Email'];
 window.__dt = {c: null, s: []};
-document.addEventListener('click', () => { if (window.__dt.c === null) window.__dt.c = performance.now(); }, true);
+document.addEventListener('click', () => { if (window.__dt.c === null) { window.__dt.c = performance.now(); window.__dt.cw = Date.now(); } }, true);
 const id = setInterval(() => {
   const pills = [...document.querySelectorAll('a,button')].filter(e => labels.includes(e.textContent.trim())).map(e => {
     const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return null;
@@ -108,6 +109,26 @@ const id = setInterval(() => {
   if (window.__dt.s.length > 400) clearInterval(id);
 }, 40);
 return true;`;
+
+// Sync marker: a magenta band painted on screen at a known wall-clock instant. The runner and the simulator share one clock,
+// so the detector finds the band's first video frame and derives the video-clock offset for this walk automatically.
+const MARK = `const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:35%;width:100%;height:12%;z-index:2147483647;pointer-events:none;background:#f0f';
+document.body.appendChild(d); const t = Date.now(); setTimeout(() => d.remove(), 700); return t;`;
+
+// served build id: sync start + poll (an async script dies at Appium's script timeout)
+async function probeBuild() {
+  const rx = req.probe || '"fp-\\d+"';
+  await js(`window.__dtBuild = null; const rx = new RegExp(arguments[0]);
+    Promise.all([...document.scripts].map(x => x.src).filter(Boolean).map(u => fetch(u).then(r => r.text()).then(t => (t.match(rx) || [])[0]).catch(() => null)))
+      .then(a => { window.__dtBuild = a.find(Boolean) || 'none'; }).catch(e => { window.__dtBuild = 'error ' + e; });
+    return true;`, [rx]);
+  for (let i = 0; i < 40; i++) {
+    const b = await js('return window.__dtBuild');
+    if (b) return b;
+    await sleep(500);
+  }
+  return 'probe-timeout';
+}
 
 // frame loop that runs while the click is in flight (simctl screenshot, jpeg)
 function frameLoop(prefix) {
@@ -126,6 +147,11 @@ async function finish() {
   try { await wd('DELETE', S('')); } catch {}
   writeFileSync(`${out}/trace.json`, JSON.stringify(trace, null, 1));
   return 0;
+}
+// path: tap steps; exactly one carries measure:true (the tap whose aftermath is judged). Default = the footer row-35 path.
+function pathFor(t) {
+  if (req.path) return req.path;
+  return [{ tapText: 'Next' }, { tapText: 'Next' }, { tapText: 'Projects' }, { tapHref: t.card || req.card, waitMs: req.cardWaitMs ?? 3000 }, { tapText: 'Next', measure: true }];
 }
 const targets = req.targets || [{ name: 'target', url: req.url }];
 const walks = req.walks || 1;
@@ -173,22 +199,32 @@ async function oneWalk(t, n) {
     log({ ev: 'navigated', target: t.name, walk: n, url: t.url });
     await sleep(4000);
     shot(`${pre}-00-load`);
-    await tap('text', 'Next', 'next-1'); await sleep(3500);
-    await tap('text', 'Next', 'next-2'); await sleep(3500); shot(`${pre}-02-after-next-2`);
-    await tap('text', 'Projects', 'projects'); await sleep(3500); shot(`${pre}-03-home`);
-    await tap('href', t.card || req.card, 'card'); await sleep(req.cardWaitMs ?? 3000); shot(`${pre}-04-before-next-3`);
-    const build = await wd('POST', S('/execute/async'), { args: [], script: `const done = arguments[arguments.length - 1];
-      Promise.all([...document.scripts].map(x => x.src).filter(Boolean).map(u => fetch(u).then(r => r.text()).then(t => (t.match(/"fp-\\d+"/) || [])[0]).catch(() => null)))
-                .then(a => done(a.find(Boolean) || 'none'));` }).catch((e) => 'probe-id-error ' + e.message);
-    log({ ev: 'build-id', target: t.name, walk: n, build });
-    await js(INSTALL);
-    const stopFrames = frameLoop(`${pre}-05-row35`);
-    await tap('text', 'Next', 'next-3-row35');
-    await sleep(4500);
-    await stopFrames();
+    const steps = pathFor(t);
+    let mi = 0;
+    for (const [k, st] of steps.entries()) {
+      const label = st.label || `step-${k + 1}`;
+      if (st.measure) {
+        const build = await probeBuild().catch((e) => 'probe-error ' + e.message);
+        log({ ev: 'build-id', target: t.name, walk: n, build });
+        await js(INSTALL);
+        const markWall = await js(MARK);
+        log({ ev: 'sync-marker', target: t.name, walk: n, wall: markWall });
+        await sleep(1000);
+        const stopFrames = frameLoop(`${pre}-05-measure`);
+        await tap(st.tapHref ? 'href' : 'text', st.tapHref || st.tapText, label + '-measure');
+        await sleep(4500);
+        await stopFrames();
+        mi++;
+      } else {
+        await tap(st.tapHref ? 'href' : 'text', st.tapHref || st.tapText, label);
+        await sleep(st.waitMs ?? 3500);
+      }
+      if (k === steps.length - 2) shot(`${pre}-04-before-measure`);
+    }
+    if (!mi) throw new Error('path has no measure step');
     const dt = JSON.parse(await js('return JSON.stringify(window.__dt)'));
-    writeFileSync(`${out}/${pre}-row35-samples.json`, JSON.stringify(dt));
-    log({ ev: 'row35-samples', target: t.name, walk: n, clickAt: dt.c, count: dt.s.length });
+    writeFileSync(`${out}/${pre}-measure-samples.json`, JSON.stringify(dt));
+    log({ ev: 'measure-samples', target: t.name, walk: n, clickAt: dt.c, clickWall: dt.cw, count: dt.s.length });
     shot(`${pre}-06-settled`);
     const v = verdictOf(dt);
     verdicts.push({ target: t.name, walk: n, ...v }); log({ ev: 'verdict', target: t.name, walk: n, ...v });
@@ -203,7 +239,7 @@ async function oneWalk(t, n) {
 try {
   rec = spawn('xcrun', ['simctl', 'io', udid, 'recordVideo', '--codec=h264', '--force', `${out}/walk.mp4`], { stdio: 'ignore' });
   await sleep(1500);
-  log({ ev: 'record-start' });
+  log({ ev: 'record-start', wall: Date.now() });
   if (req.mechanics) {
     await wd('POST', S('/url'), { url: req.url }); await sleep(4000); shot('00-load');
     await tap('text', req.mechanics.tapText, 'mechanics-tap'); await sleep(3000); shot('01-after-tap');

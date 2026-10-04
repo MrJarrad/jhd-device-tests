@@ -19,6 +19,8 @@ sleep 5
 xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebKitDeveloperExtrasEnabledPreferenceKey -bool true || true
 xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebInspectorEnabled -bool true || true
 sleep 5
+brew install ffmpeg >"$OUT/ffmpeg-install.log" 2>&1 &
+FFMPEG_PID=$!
 npm i -g appium@latest >"$OUT/appium-install.log" 2>&1
 appium driver install xcuitest >>"$OUT/appium-install.log" 2>&1
 appium --log-no-colors >"$OUT/appium.log" 2>&1 &
@@ -37,6 +39,9 @@ RC=$?
 echo "walk exit code: $RC"
 # scrub any JWT that appium logged
 sed -i.bak -E "s/eyJ[A-Za-z0-9_.-]{20,}/<redacted>/g" "$OUT"/*.log "$OUT"/trace.json 2>/dev/null; rm -f "$OUT"/*.bak
+# pixel verdict from the recording (automatic sync marker); output stays in the results dir, summary lines are non-sensitive
+wait $FFMPEG_PID 2>/dev/null
+python3 scripts/pixel-detector.py "$OUT" >"$OUT/pixel-detector.log" 2>&1 || echo "pixel detector failed (see sealed pixel-detector.log)"
 # frames to jpeg (publishing limit: a results branch file must stay under 100MB)
 for f in "$OUT"/*.png; do [ -f "$f" ] && sips -s format jpeg -s formatOptions 72 "$f" --out "${f%.png}.jpg" >/dev/null 2>&1 && rm -f "$f"; done
 kill $APPIUM_PID 2>/dev/null || true
