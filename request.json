@@ -1,5 +1,9 @@
 {
-  "url": "https://example.com/",
-  "mechanics": { "tapText": "Learn more" },
+  "targets": [
+    { "name": "bug-fp2", "url": "https://90b67824-jhd-preview-staging.jh-229.workers.dev/projects/yardsale", "card": "/projects/yardsale" },
+    { "name": "fix-fp4", "url": "https://preview-footer-next-jhd-preview-staging.jh-229.workers.dev/projects/yardsale", "card": "/projects/yardsale" }
+  ],
+  "walks": 3,
+  "cardWaitMs": 3000,
   "runtime": "18"
 }

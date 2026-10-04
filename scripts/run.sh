@@ -29,10 +29,7 @@ if [ -z "$(node -p "require('./request.json').mechanics?1:''")" ]; then
   if [ -z "${CF_ACCESS_CLIENT_ID:-}" ] || [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
     echo "ERROR: preview is behind Cloudflare Access; repo secrets CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET are not set" | tee "$OUT/AUTH-MISSING.txt"; kill $APPIUM_PID; exit 3
   fi
-  URL=$(node -p "require('./request.json').url")
-  CF_AUTH_COOKIE=$(curl -s -D - -o /dev/null -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$URL" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: CF_Authorization=\([^;]*\).*/\1/p' | head -1)
-  [ -n "$CF_AUTH_COOKIE" ] || { echo "ERROR: Access did not return a CF_Authorization cookie (token rejected?)" | tee "$OUT/AUTH-FAILED.txt"; kill $APPIUM_PID; exit 3; }
-  echo "::add-mask::$CF_AUTH_COOKIE"; export CF_AUTH_COOKIE
+  # the walk exchanges the token per target host itself (cookie value never leaves the runner)
 fi
 # walk output stays in the file (published encrypted); the public Actions log gets no page text
 node scripts/walk.mjs "$UDID" "$OUT" >"$OUT/walk.log" 2>&1
