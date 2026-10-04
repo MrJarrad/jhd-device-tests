@@ -1,0 +1,34 @@
+name: device-walk
+# Trigger: push a branch named run/<anything> (edit request.json on it), or workflow_dispatch.
+# Results are committed to branch results/<branch-name> so anyone can `git fetch` them.
+on:
+  push:
+    branches: ['run/**', 'main']
+    paths: ['request.json', 'scripts/**', '.github/workflows/device-walk.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  walk:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Walk in iOS Simulator
+        id: walk
+        run: scripts/run.sh out
+        continue-on-error: true
+      - name: Publish results to results/<ref>-<sha>
+        if: always()
+        run: |
+          BR="results/${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
+          echo "job-seconds-so-far: $SECONDS  outcome: ${{ steps.walk.outcome }}" > out/summary.txt
+          git config user.name "device-walk"; git config user.email "device-walk@users.noreply.github.com"
+          git checkout --orphan "$BR"; git rm -rf --quiet . 2>/dev/null || true
+          git add -f out; git commit -qm "results for $GITHUB_SHA (${{ steps.walk.outcome }})"
+          git push origin "$BR"
+      - name: Fail if walk failed
+        if: steps.walk.outcome == 'failure'
+        run: exit 1
