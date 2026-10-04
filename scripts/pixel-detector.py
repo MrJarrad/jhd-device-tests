@@ -16,7 +16,7 @@ FPS = 20
 WINDOW_S = 6.0
 MIN_RUN_S = 0.2
 FLAT_STD = 5.0          # grey-level stdev of the 12x12 patch below which it counts as flat
-MARK_NEAR_S = 20.0      # marker edge must be this close to where the wall clock says it should be
+PAIR_TOL_S = 2.0        # marker-to-marker spacing in the video must match the wall clock within this
 
 
 def load(out):
@@ -43,6 +43,23 @@ def decode(video, region, tmp):
     return edges, stds
 
 
+def pair_markers(markers, edges):
+    """Match each marker (wall ms) to its video edge (frame). The recording starts an unknown, slow-to-boot time after
+    the runner logs it, so no absolute offset is assumed: pick the offset at which the most markers line up with an
+    edge within PAIR_TOL_S, trying each edge as the first marker's."""
+    ms = sorted(markers.items(), key=lambda kv: kv[1])
+    if not ms or not edges: return {}
+    best = (-1, None)
+    for e in edges:
+        off = e - ms[0][1] / 1000 * FPS
+        got = {}
+        for key, wall in ms:
+            c = min(edges, key=lambda k: abs(k - (wall / 1000 * FPS + off)))
+            if abs(c - (wall / 1000 * FPS + off)) <= PAIR_TOL_S * FPS: got[key] = c
+        if len(got) > best[0]: best = (len(got), got)
+    return best[1]
+
+
 def main(out):
     trace, ev = load(out)
     req = trace.get('request', {})
@@ -59,16 +76,16 @@ def main(out):
     seen = set((t, w) for t, w, _ in walks)
     for (t, w) in markers:                      # walks that reached the marker but not the tap sample
         if (t, w) not in seen: walks.append((t, w, None))
+    pair = pair_markers(markers, edges)
     res = []
     for t, w, cw in walks:
         row = {'target': t, 'walk': w, 'build': builds.get((t, w))}
         tm = markers.get((t, w))
         if tm is None or cw is None or not edges:
             res.append({**row, 'verdict': 'NO-DATA', 'why': 'no marker or click time or recording'}); continue
-        est = (tm - rec) / 1000 * FPS            # frame the wall clock predicts, within recording-start latency
-        km = min(edges, key=lambda k: abs(k - est))
-        if abs(km - est) > MARK_NEAR_S * FPS:
-            res.append({**row, 'verdict': 'NO-DATA', 'why': 'marker edge not found near expected time'}); continue
+        km = pair.get((t, w))
+        if km is None:
+            res.append({**row, 'verdict': 'NO-DATA', 'why': 'no marker edge in the recording matches this walk'}); continue
         k0 = km + round((cw - tm) / 1000 * FPS)  # frame of the tap
         win = stds[k0:k0 + int(WINDOW_S * FPS)]
         bad = [s >= FLAT_STD for s in win]
@@ -77,7 +94,7 @@ def main(out):
             run = run + 1 if b else 0; best = max(best, run)
         covered = best >= MIN_RUN_S * FPS
         res.append({**row, 'verdict': 'COVERED' if covered else 'HELD', 'coveredSeconds': round(sum(bad) / FPS, 2),
-                    'longestRunSeconds': round(best / FPS, 2), 'markerOffsetFrames': km - round(est), 'frames': len(win),
+                    'longestRunSeconds': round(best / FPS, 2), 'markerFrame': km, 'frames': len(win),
                     'timeline': ''.join('.' if b else 'P' for b in bad)})
     json.dump(res, open(f'{out}/pixel-verdicts.json', 'w'), indent=1)
     with open(f'{out}/pixel-summary.txt', 'w') as f:
