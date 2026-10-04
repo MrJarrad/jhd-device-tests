@@ -3,12 +3,12 @@
 
 usage: pixel-detector.py <outDir>   (reads trace.json + walk.mp4; writes pixel-verdicts.json and pixel-summary.txt)
 
-Clock sync is automatic: walk.mjs paints a magenta band at a known wall-clock instant before each measured tap
-(trace event `sync-marker`). The band's first video frame gives that walk's video-clock offset; the tap's
-position in the video follows from the page-side click wall time (`measure-samples.clickWall`).
+Sync is automatic: the measured tap itself paints a magenta band on screen (page-side click listener), as many
+pulses as the walk's ordinal in the run (`measure-samples.id`). The first video frame of the band is the tap; the pulse
+count tells walks apart. No clock offset is assumed anywhere (the recording's clock drifts against wall time).
 
 Verdict per walk: COVERED when the watched patch is non-flat for a run of >= MIN_RUN_S within WINDOW_S of the tap,
-HELD when it stays flat, NO-DATA when the marker or the tap time is missing (never guessed).
+HELD when it stays flat, NO-DATA when the tap's flash is not found (never guessed).
 """
 import json, subprocess, sys, os, statistics
 
@@ -16,7 +16,7 @@ FPS = 20
 WINDOW_S = 6.0
 MIN_RUN_S = 0.2
 FLAT_STD = 5.0          # grey-level stdev of the 12x12 patch below which it counts as flat
-PAIR_TOL_S = 2.0        # marker-to-marker spacing in the video must match the wall clock within this
+GROUP_GAP_S = 0.9       # flash pulses closer than this belong to one tap
 
 
 def load(out):
@@ -43,21 +43,16 @@ def decode(video, region, tmp):
     return edges, stds
 
 
-def pair_markers(markers, edges):
-    """Match each marker (wall ms) to its video edge (frame). The recording starts an unknown, slow-to-boot time after
-    the runner logs it, so no absolute offset is assumed: pick the offset at which the most markers line up with an
-    edge within PAIR_TOL_S, trying each edge as the first marker's."""
-    ms = sorted(markers.items(), key=lambda kv: kv[1])
-    if not ms or not edges: return {}
-    best = (-1, None)
+def tap_frames(edges):
+    """Group flash edges (pulses of one tap are ~0.6 s apart) -> {pulse count: frame of the first pulse = the tap}."""
+    groups, cur = [], []
     for e in edges:
-        off = e - ms[0][1] / 1000 * FPS
-        got = {}
-        for key, wall in ms:
-            c = min(edges, key=lambda k: abs(k - (wall / 1000 * FPS + off)))
-            if abs(c - (wall / 1000 * FPS + off)) <= PAIR_TOL_S * FPS: got[key] = c
-        if len(got) > best[0]: best = (len(got), got)
-    return best[1]
+        if cur and e - cur[-1] > GROUP_GAP_S * FPS: groups.append(cur); cur = []
+        cur.append(e)
+    if cur: groups.append(cur)
+    out = {}
+    for g in groups: out.setdefault(len(g), []).append(g[0])
+    return {n: fs[0] for n, fs in out.items() if len(fs) == 1}   # a count seen twice is ambiguous: not used
 
 
 def main(out):
@@ -65,28 +60,18 @@ def main(out):
     req = trace.get('request', {})
     r = req.get('pixelRegion') or {}
     region = (r.get('x', 0.517), r.get('y', 0.785), r.get('w', 0.03), r.get('h', 0.03))
-    rec = (ev.get('record-start') or [{}])[0].get('wall')
-    t0 = trace['t0Wall']
     video = f'{out}/walk.mp4'
     tmp = f'{out}/.pixel-tmp'; os.makedirs(tmp, exist_ok=True)
-    edges, stds = decode(video, region, tmp) if os.path.exists(video) and rec else ([], [])
-    markers = {(e['target'], e['walk']): e['wall'] for e in ev.get('sync-marker', [])}
+    edges, stds = decode(video, region, tmp) if os.path.exists(video) else ([], [])
     builds = {(e['target'], e['walk']): e.get('build') for e in ev.get('build-id', [])}
-    walks = [(e['target'], e['walk'], e.get('clickWall')) for e in ev.get('measure-samples', [])]
-    seen = set((t, w) for t, w, _ in walks)
-    for (t, w) in markers:                      # walks that reached the marker but not the tap sample
-        if (t, w) not in seen: walks.append((t, w, None))
-    pair = pair_markers(markers, edges)
+    walks = [(e['target'], e['walk'], e.get('id')) for e in ev.get('measure-samples', [])]
+    taps = tap_frames(edges)
     res = []
-    for t, w, cw in walks:
+    for t, w, wid in walks:
         row = {'target': t, 'walk': w, 'build': builds.get((t, w))}
-        tm = markers.get((t, w))
-        if tm is None or cw is None or not edges:
-            res.append({**row, 'verdict': 'NO-DATA', 'why': 'no marker or click time or recording'}); continue
-        km = pair.get((t, w))
-        if km is None:
-            res.append({**row, 'verdict': 'NO-DATA', 'why': 'no marker edge in the recording matches this walk'}); continue
-        k0 = km + round((cw - tm) / 1000 * FPS)  # frame of the tap
+        k0 = taps.get(wid)
+        if k0 is None:
+            res.append({**row, 'verdict': 'NO-DATA', 'why': f'no flash with {wid} pulses found in the recording'}); continue
         win = stds[k0:k0 + int(WINDOW_S * FPS)]
         bad = [s >= FLAT_STD for s in win]
         run = best = 0
@@ -94,7 +79,7 @@ def main(out):
             run = run + 1 if b else 0; best = max(best, run)
         covered = best >= MIN_RUN_S * FPS
         res.append({**row, 'verdict': 'COVERED' if covered else 'HELD', 'coveredSeconds': round(sum(bad) / FPS, 2),
-                    'longestRunSeconds': round(best / FPS, 2), 'markerFrame': km, 'frames': len(win),
+                    'longestRunSeconds': round(best / FPS, 2), 'tapFrame': k0, 'frames': len(win),
                     'timeline': ''.join('.' if b else 'P' for b in bad)})
     json.dump(res, open(f'{out}/pixel-verdicts.json', 'w'), indent=1)
     with open(f'{out}/pixel-summary.txt', 'w') as f:

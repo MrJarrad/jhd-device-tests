@@ -9,7 +9,7 @@ What one run does: opens each target, replays the tap path with native touches, 
 2. Edit `request.json`, commit, `git push origin run/<name>`. Only `run/**` branches and manual dispatch trigger; main does not.
 3. Wait. Status without auth: `curl -s "https://api.github.com/repos/MrJarrad/jhd-device-tests/actions/runs?per_page=1"` (`status`, `conclusion`, `head_sha`).
 
-Minutes per run: about 5 fixed (simulator boot, Appium and WebDriverAgent start, ffmpeg install) plus about 3 per walk. Measured: 1 target x 3 walks = 13.5 min wall. Hard limits: walks stop at 17 min, the walk step at 24, the job at 30, so keep targets x walks at 6 or fewer.
+Minutes per run: about 6 fixed (simulator boot, Appium and WebDriverAgent start, ffmpeg install) plus about 2.5 per walk. Measured: 1 target x 3 walks = 13.5 min wall, 2 targets x 3 walks = 21 min. Hard limits: walks stop at 17 min of walking, the walk step at 24, the job at 30, so keep targets x walks at 6 or fewer.
 
 ## Request format (`request.json`)
 ```json
@@ -50,8 +50,9 @@ target fix held=1 covered=1 no-data=0 of 2
 Sealed contents: `pixel-verdicts.json` (per walk: verdict, covered seconds, longest run, a 0.05 s timeline, `P` flat and `.` disturbed), `pixel-summary.txt`, `verdicts.json` (the DOM sampler, kept for comparison only), `walk.mp4` (recording), jpeg frames, `trace.json`, `walk.log`, `appium.log`, `env.txt`. Vault media is capped at 50 MB per file: cut clips from `walk.mp4` (`ffmpeg -ss <t> -t 8 ...`) before banking.
 
 ## How the verdict is made
-- Each measured tap is preceded by a magenta band flashed on screen at a known wall-clock instant (the runner and simulator share one clock). The detector (`scripts/pixel-detector.py`, run on the runner with ffmpeg) finds those bands in `walk.mp4`, matches them to walks by their spacing, and so places every tap in the video with no hand-calibrated offset. The recording starts tens of seconds after the runner logs it, which is why no absolute offset is assumed.
-- The tap's own moment comes from the page (`click` capture listener, wall time). The watched patch is sampled at 20 fps for 6 s after it.
+- The measured tap paints a magenta band on screen (page-side `click` listener), as many 300 ms pulses as the walk's ordinal in the run (walk 1 = one pulse, walk 4 = four). The detector (`scripts/pixel-detector.py`, run on the runner with ffmpeg) finds the bands in `walk.mp4`: the first frame of a group is the tap, the pulse count says which walk. No clock offset is assumed anywhere: the recording's clock runs tens of seconds behind the runner's log and drifts against it (a wall-clock sync was tried and mis-paired walks, so it was dropped). A walk whose flash cannot be found is `no-data`, never guessed.
+- From the tap the watched patch is sampled at 20 fps for 6 s. The band sits at 35-47% of screen height, clear of the default patch.
+- The detector is checkable by hand: `python3 scripts/pixel-detector.py <decrypted dir>` re-derives `pixel-verdicts.json` from `trace.json` + `walk.mp4` (needs ffmpeg).
 
 ## Previews behind Cloudflare Access
 The runner exchanges the service token for the `CF_Authorization` cookie per host and sets it in Safari (`/cdn-cgi/trace` on the same host is served without a login). Needs repo secrets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the `claude-testing` token). Without them the run stops with `out/AUTH-MISSING.txt`. The cookie is redacted from published logs. The public Actions log carries no walk output; never add `tee`/`cat` of results to the workflow. `summary.txt` carries only target names, verdicts, covered seconds and the probe id.

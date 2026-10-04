@@ -97,7 +97,14 @@ async function tap(kind, key, label) {
 const INSTALL = `
 const labels = ['Next','Projects','Profile','Email'];
 window.__dt = {c: null, s: []};
-document.addEventListener('click', () => { if (window.__dt.c === null) { window.__dt.c = performance.now(); window.__dt.cw = Date.now(); } }, true);
+const ID = arguments[0];
+document.addEventListener('click', () => { if (window.__dt.c !== null) return; window.__dt.c = performance.now(); window.__dt.cw = Date.now();
+  // sync flash: ID magenta pulses (300 ms on, 300 ms off) starting at the click; the first pulse's first video frame IS the tap
+  const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:35%;width:100%;height:12%;z-index:2147483647;pointer-events:none;background:#f0f';
+  document.body.appendChild(d);
+  for (let i = 1; i < ID; i++) { setTimeout(() => d.remove(), 600 * i - 300); setTimeout(() => document.body.appendChild(d), 600 * i); }
+  setTimeout(() => d.remove(), 600 * ID - 300);
+}, true);
 const id = setInterval(() => {
   const pills = [...document.querySelectorAll('a,button')].filter(e => labels.includes(e.textContent.trim())).map(e => {
     const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return null;
@@ -110,10 +117,8 @@ const id = setInterval(() => {
 }, 40);
 return true;`;
 
-// Sync marker: a magenta band painted on screen at a known wall-clock instant. The runner and the simulator share one clock,
-// so the detector finds the band's first video frame and derives the video-clock offset for this walk automatically.
-const MARK = `const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:35%;width:100%;height:12%;z-index:2147483647;pointer-events:none;background:#f0f';
-document.body.appendChild(d); const t = Date.now(); setTimeout(() => d.remove(), 700); return t;`;
+// Sync flash (inside INSTALL): the tap paints a magenta band on screen, one pulse per measured-walk ordinal, so the detector
+// finds the tap in the recording directly (no clock offset, no cross-clock guess) and tells walks apart by pulse count.
 
 // served build id: sync start + poll (an async script dies at Appium's script timeout)
 async function probeBuild() {
@@ -156,6 +161,7 @@ function pathFor(t) {
 const targets = req.targets || [{ name: 'target', url: req.url }];
 const walks = req.walks || 1;
 const verdicts = [];
+let measured = 0;   // ordinal of the measured tap across the run = its sync-flash pulse count
 
 async function authFor(url) {
   const id = process.env.CF_ACCESS_CLIENT_ID, secret = process.env.CF_ACCESS_CLIENT_SECRET;
@@ -206,10 +212,8 @@ async function oneWalk(t, n) {
       if (st.measure) {
         const build = await probeBuild().catch((e) => 'probe-error ' + e.message);
         log({ ev: 'build-id', target: t.name, walk: n, build });
-        await js(INSTALL);
-        const markWall = await js(MARK);
-        log({ ev: 'sync-marker', target: t.name, walk: n, wall: markWall });
-        await sleep(1000);
+        measured++;
+        await js(INSTALL, [measured]);
         const stopFrames = frameLoop(`${pre}-05-measure`);
         await tap(st.tapHref ? 'href' : 'text', st.tapHref || st.tapText, label + '-measure');
         await sleep(4500);
@@ -224,7 +228,7 @@ async function oneWalk(t, n) {
     if (!mi) throw new Error('path has no measure step');
     const dt = JSON.parse(await js('return JSON.stringify(window.__dt)'));
     writeFileSync(`${out}/${pre}-measure-samples.json`, JSON.stringify(dt));
-    log({ ev: 'measure-samples', target: t.name, walk: n, clickAt: dt.c, clickWall: dt.cw, count: dt.s.length });
+    log({ ev: 'measure-samples', target: t.name, walk: n, id: measured, clickAt: dt.c, clickWall: dt.cw, count: dt.s.length });
     shot(`${pre}-06-settled`);
     const v = verdictOf(dt);
     verdicts.push({ target: t.name, walk: n, ...v }); log({ ev: 'verdict', target: t.name, walk: n, ...v });
