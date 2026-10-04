@@ -3,12 +3,14 @@
 
 usage: pixel-detector.py <outDir>   (reads trace.json + walk.mp4; writes pixel-verdicts.json and pixel-summary.txt)
 
-Sync is automatic: the measured tap itself paints a magenta band on screen (page-side click listener), as many
-pulses as the walk's ordinal in the run (`measure-samples.id`). The first video frame of the band is the tap; the pulse
-count tells walks apart. No clock offset is assumed anywhere (the recording's clock drifts against wall time).
+Sync is automatic and clock-free where it can be: walk.mjs paints full-width bands whose vertical position encodes the
+walk's ordinal in the run. A cyan band is painted by the tap itself (its first video frame IS the tap). A magenta band is
+painted shortly before the tap at a logged wall time; if the cyan band was lost to a recorder stall, the tap is placed
+from the magenta band plus the page's wall-clock gap between the two (seconds, so drift is negligible). The recording's
+clock runs tens of seconds behind the runner's and is not linear against it, so no absolute offset is ever assumed.
 
 Verdict per walk: COVERED when the watched patch is non-flat for a run of >= MIN_RUN_S within WINDOW_S of the tap,
-HELD when it stays flat, NO-DATA when the tap's flash is not found (never guessed).
+HELD when it stays flat, NO-DATA when no band for that walk is found (never guessed).
 """
 import json, subprocess, sys, os, statistics
 
@@ -16,7 +18,6 @@ FPS = 20
 WINDOW_S = 6.0
 MIN_RUN_S = 0.2
 FLAT_STD = 5.0          # grey-level stdev of the 12x12 patch below which it counts as flat
-GROUP_GAP_S = 0.9       # flash pulses closer than this belong to one tap
 
 
 def load(out):
@@ -30,29 +31,45 @@ def load(out):
 def decode(video, region, tmp):
     x, y, w, h = region
     fc = (f'[0:v]fps={FPS},split[a][b];'
-          f'[a]crop=iw:ih*0.10:0:ih*0.36,scale=1:1,format=rgb24[m];'
+          f'[a]crop=iw*0.1:ih:iw*0.45:0,scale=1:{ROWS}:flags=area,format=rgb24[m];'
           f'[b]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale=12:12,format=gray[p]')
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', video, '-filter_complex', fc,
                     '-map', '[m]', '-f', 'rawvideo', f'{tmp}/band.raw', '-map', '[p]', '-f', 'rawvideo', f'{tmp}/pill.raw'], check=True)
     band = open(f'{tmp}/band.raw', 'rb').read()
     pill = open(f'{tmp}/pill.raw', 'rb').read()
-    marks = [band[i:i + 3] for i in range(0, len(band) - 2, 3)]
-    is_mark = [m[0] > 180 and m[2] > 180 and m[1] < 110 for m in marks]
-    edges = [k for k in range(len(is_mark)) if is_mark[k] and (k == 0 or not is_mark[k - 1])]
+    fs = ROWS * 3
+    magenta, cyan = {}, {}                  # walk ordinal -> frames the band is showing
+    for k in range(len(band) // fs):
+        fr = band[k * fs:(k + 1) * fs]
+        px = [(fr[i], fr[i + 1], fr[i + 2]) for i in range(0, fs, 3)]
+        for flags, store in (([r > 190 and b > 190 and g < 90 for r, g, b in px], magenta),
+                             ([r < 70 and g > 190 and b > 190 for r, g, b in px], cyan)):
+            bid = band_id(flags)
+            if bid: store.setdefault(bid, []).append(k)
     stds = [statistics.pstdev(pill[i:i + 144]) for i in range(0, len(pill) - 143, 144)]
-    return edges, stds
+    return first_runs(magenta), first_runs(cyan), stds
 
 
-def tap_frames(edges):
-    """Group flash edges (pulses of one tap are ~0.6 s apart) -> {pulse count: frame of the first pulse = the tap}."""
-    groups, cur = [], []
-    for e in edges:
-        if cur and e - cur[-1] > GROUP_GAP_S * FPS: groups.append(cur); cur = []
-        cur.append(e)
-    if cur: groups.append(cur)
+ROWS = 200              # vertical resolution of the band strip (0.5% of screen height per row)
+N_IDS = 12
+
+
+def band_id(row_flags):
+    """Walk ordinal from the vertical position of a band (centre of the flagged rows), or None."""
+    rows = [i for i, f in enumerate(row_flags) if f]
+    if not rows or rows[-1] - rows[0] > 12: return None      # one band is ~4 rows; wider/split = content, not a band
+    y = (sum(rows) / len(rows) + 0.5) / ROWS * 100            # percent of screen height
+    i = round((y - 7) / 2.5) + 1
+    return i if 1 <= i <= N_IDS and abs(y - (7 + 2.5 * (i - 1))) < 1.0 else None
+
+
+def first_runs(store):
+    """ordinal -> first frame of its band, only when the band shows as one burst (a second burst >1.5 s later = ambiguous)."""
     out = {}
-    for g in groups: out.setdefault(len(g), []).append(g[0])
-    return {n: fs[0] for n, fs in out.items() if len(fs) == 1}   # a count seen twice is ambiguous: not used
+    for bid, ks in store.items():
+        bursts = 1 + sum(1 for a, b in zip(ks, ks[1:]) if b - a > 1.5 * FPS)
+        if bursts == 1: out[bid] = ks[0]
+    return out
 
 
 def main(out):
@@ -62,16 +79,19 @@ def main(out):
     region = (r.get('x', 0.517), r.get('y', 0.785), r.get('w', 0.03), r.get('h', 0.03))
     video = f'{out}/walk.mp4'
     tmp = f'{out}/.pixel-tmp'; os.makedirs(tmp, exist_ok=True)
-    edges, stds = decode(video, region, tmp) if os.path.exists(video) else ([], [])
+    marks, clicks, stds = decode(video, region, tmp) if os.path.exists(video) else ({}, {}, [])
     builds = {(e['target'], e['walk']): e.get('build') for e in ev.get('build-id', [])}
-    walks = [(e['target'], e['walk'], e.get('id')) for e in ev.get('measure-samples', [])]
-    taps = tap_frames(edges)
+    mwall = {(e['target'], e['walk']): e['wall'] for e in ev.get('sync-marker', [])}
+    walks = [(e['target'], e['walk'], e.get('id'), e.get('clickWall')) for e in ev.get('measure-samples', [])]
     res = []
-    for t, w, wid in walks:
+    for t, w, wid, cw in walks:
         row = {'target': t, 'walk': w, 'build': builds.get((t, w))}
-        k0 = taps.get(wid)
-        if k0 is None:
-            res.append({**row, 'verdict': 'NO-DATA', 'why': f'no flash with {wid} pulses found in the recording'}); continue
+        if wid in clicks:                                   # the tap's own band: no clock involved
+            k0, sync = clicks[wid], 'tap-band'
+        elif wid in marks and cw and (t, w) in mwall:       # pre-tap band + the page's wall-clock gap to the click
+            k0, sync = marks[wid] + round((cw - mwall[(t, w)]) / 1000 * FPS), 'marker+gap'
+        else:
+            res.append({**row, 'verdict': 'NO-DATA', 'why': f'no sync band for walk {wid} found in the recording'}); continue
         win = stds[k0:k0 + int(WINDOW_S * FPS)]
         bad = [s >= FLAT_STD for s in win]
         run = best = 0
@@ -79,13 +99,13 @@ def main(out):
             run = run + 1 if b else 0; best = max(best, run)
         covered = best >= MIN_RUN_S * FPS
         res.append({**row, 'verdict': 'COVERED' if covered else 'HELD', 'coveredSeconds': round(sum(bad) / FPS, 2),
-                    'longestRunSeconds': round(best / FPS, 2), 'tapFrame': k0, 'frames': len(win),
+                    'longestRunSeconds': round(best / FPS, 2), 'sync': sync, 'tapFrame': k0, 'frames': len(win),
                     'timeline': ''.join('.' if b else 'P' for b in bad)})
     json.dump(res, open(f'{out}/pixel-verdicts.json', 'w'), indent=1)
     with open(f'{out}/pixel-summary.txt', 'w') as f:
         for v in res:
             f.write(f"walk {v['target']} w{v['walk']} {v['verdict'].lower()}"
-                    + (f" covered={v['coveredSeconds']}s" if 'coveredSeconds' in v else '')
+                    + (f" covered={v['coveredSeconds']}s sync={v['sync']}" if 'coveredSeconds' in v else '')
                     + f" build={(v.get('build') or 'unknown').replace(chr(34), '')}\n")
         for t in dict.fromkeys(v['target'] for v in res):
             vs = [v['verdict'] for v in res if v['target'] == t]

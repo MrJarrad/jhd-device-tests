@@ -94,16 +94,18 @@ async function tap(kind, key, label) {
 }
 
 // page-side sampler: Appium round trips are too slow (about 7s per tap) to catch a 2.5s transition, so the page samples itself.
+// Sync bands: full-width bands painted at a vertical position that encodes the measured-walk ordinal (1..12), so the detector
+// reads which walk a band belongs to from its position, not from counting or ordering. Magenta = pre-tap marker (known wall
+// time), cyan = painted by the tap itself. Both sit in the top third, clear of the watched patch.
+const BAND = `window.__dtBand = (color, id, ms) => { const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;left:0;width:100%;height:2%;z-index:2147483647;pointer-events:none;background:' + color + ';top:' + (6 + 2.5 * (id - 1)) + '%';
+  document.body.appendChild(d); setTimeout(() => d.remove(), ms); return Date.now(); };`;
 const INSTALL = `
 const labels = ['Next','Projects','Profile','Email'];
 window.__dt = {c: null, s: []};
 const ID = arguments[0];
 document.addEventListener('click', () => { if (window.__dt.c !== null) return; window.__dt.c = performance.now(); window.__dt.cw = Date.now();
-  // sync flash: ID magenta pulses (300 ms on, 300 ms off) starting at the click; the first pulse's first video frame IS the tap
-  const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:35%;width:100%;height:12%;z-index:2147483647;pointer-events:none;background:#f0f';
-  document.body.appendChild(d);
-  for (let i = 1; i < ID; i++) { setTimeout(() => d.remove(), 600 * i - 300); setTimeout(() => document.body.appendChild(d), 600 * i); }
-  setTimeout(() => d.remove(), 600 * ID - 300);
+  window.__dtBand('#0ff', ID, 1500);   // the tap paints its own cyan band (position = walk ordinal)
 }, true);
 const id = setInterval(() => {
   const pills = [...document.querySelectorAll('a,button')].filter(e => labels.includes(e.textContent.trim())).map(e => {
@@ -116,9 +118,6 @@ const id = setInterval(() => {
   if (window.__dt.s.length > 400) clearInterval(id);
 }, 40);
 return true;`;
-
-// Sync flash (inside INSTALL): the tap paints a magenta band on screen, one pulse per measured-walk ordinal, so the detector
-// finds the tap in the recording directly (no clock offset, no cross-clock guess) and tells walks apart by pulse count.
 
 // served build id: sync start + poll (an async script dies at Appium's script timeout)
 async function probeBuild() {
@@ -161,7 +160,7 @@ function pathFor(t) {
 const targets = req.targets || [{ name: 'target', url: req.url }];
 const walks = req.walks || 1;
 const verdicts = [];
-let measured = 0;   // ordinal of the measured tap across the run = its sync-flash pulse count
+let measured = 0;   // ordinal of the measured tap across the run = its sync band position
 
 async function authFor(url) {
   const id = process.env.CF_ACCESS_CLIENT_ID, secret = process.env.CF_ACCESS_CLIENT_SECRET;
@@ -213,7 +212,11 @@ async function oneWalk(t, n) {
         const build = await probeBuild().catch((e) => 'probe-error ' + e.message);
         log({ ev: 'build-id', target: t.name, walk: n, build });
         measured++;
+        await js(BAND);
         await js(INSTALL, [measured]);
+        const markWall = await js('return window.__dtBand("#f0f", arguments[0], 1200)', [measured]);   // pre-tap marker: known wall time
+        log({ ev: 'sync-marker', target: t.name, walk: n, id: measured, wall: markWall });
+        await sleep(1700);
         const stopFrames = frameLoop(`${pre}-05-measure`);
         await tap(st.tapHref ? 'href' : 'text', st.tapHref || st.tapText, label + '-measure');
         await sleep(4500);

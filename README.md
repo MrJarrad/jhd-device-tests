@@ -34,11 +34,11 @@ Minutes per run: about 6 fixed (simulator boot, Appium and WebDriverAgent start,
 `git fetch origin results/run-<name>-<first 7 of sha>` then `git archive FETCH_HEAD out | tar -x -C <dir>`. `out/summary.txt` needs no decryption:
 ```
 outcome: success
-walk fix w1 held covered=0.0s build=fp-5
-walk fix w2 covered covered=1.6s build=fp-2
+walk fix w1 held covered=0.0s sync=tap-band build=fp-5
+walk fix w2 covered covered=1.6s sync=tap-band build=fp-2
 target fix held=1 covered=1 no-data=0 of 2
 ```
-- `held`: the watched patch stayed flat after the tap (footer not disturbed). `covered`: it was disturbed for at least 0.2 s within 6 s of the tap; `covered=` is the total seconds disturbed. `no-data`: the sync marker or tap time was missing; never guessed, re-run.
+- `held`: the watched patch stayed flat after the tap (footer not disturbed). `covered`: it was disturbed for at least 0.2 s within 6 s of the tap; `covered=` is the total seconds disturbed. `no-data`: no sync band for that walk was found in the recording; never guessed, re-run. `sync=` says how the tap was located (see below).
 - `build=` is the probe id the target actually served on that walk (`probe-timeout` or `none` if the page did not yield one).
 - `outcome` is whether the walk script ran; a `covered` verdict does not fail the run.
 
@@ -50,9 +50,10 @@ target fix held=1 covered=1 no-data=0 of 2
 Sealed contents: `pixel-verdicts.json` (per walk: verdict, covered seconds, longest run, a 0.05 s timeline, `P` flat and `.` disturbed), `pixel-summary.txt`, `verdicts.json` (the DOM sampler, kept for comparison only), `walk.mp4` (recording), jpeg frames, `trace.json`, `walk.log`, `appium.log`, `env.txt`. Vault media is capped at 50 MB per file: cut clips from `walk.mp4` (`ffmpeg -ss <t> -t 8 ...`) before banking.
 
 ## How the verdict is made
-- The measured tap paints a magenta band on screen (page-side `click` listener), as many 300 ms pulses as the walk's ordinal in the run (walk 1 = one pulse, walk 4 = four). The detector (`scripts/pixel-detector.py`, run on the runner with ffmpeg) finds the bands in `walk.mp4`: the first frame of a group is the tap, the pulse count says which walk. No clock offset is assumed anywhere: the recording's clock runs tens of seconds behind the runner's log and drifts against it (a wall-clock sync was tried and mis-paired walks, so it was dropped). A walk whose flash cannot be found is `no-data`, never guessed.
-- From the tap the watched patch is sampled at 20 fps for 6 s. The band sits at 35-47% of screen height, clear of the default patch.
-- The detector is checkable by hand: `python3 scripts/pixel-detector.py <decrypted dir>` re-derives `pixel-verdicts.json` from `trace.json` + `walk.mp4` (needs ffmpeg).
+- Sync bands. Each measured tap is bracketed by two full-width bands in the top third of the screen, at a vertical position that encodes the walk's ordinal in the run (1..12): a magenta band about 1.7 s before the tap (its wall time is logged) and a cyan band painted by the tap itself (page-side `click` listener). The detector (`scripts/pixel-detector.py`, run on the runner with ffmpeg) finds them in `walk.mp4`. The cyan band's first frame is the tap (`sync=tap-band`); if a recorder stall lost it, the tap is placed from the magenta band plus the page's own wall-clock gap between the two (`sync=marker+gap`, a few seconds so drift does not matter). A walk with neither band is `no-data`, never guessed.
+- Why not a clock offset: the recording's clock starts tens of seconds behind the runner's log and is not linear against it (it stretched 24 s within one run). A wall-clock offset and a pulse-count code were both tried and mis-paired or lost walks; position coding reads the walk straight off the frame.
+- From the tap the watched patch is sampled at 20 fps for 6 s. The bands sit clear of the default patch.
+- Re-derive by hand: `python3 scripts/pixel-detector.py <decrypted dir>` rebuilds `pixel-verdicts.json` from `trace.json` + `walk.mp4` (needs ffmpeg). At most 12 measured taps per run (targets x walks).
 
 ## Previews behind Cloudflare Access
 The runner exchanges the service token for the `CF_Authorization` cookie per host and sets it in Safari (`/cdn-cgi/trace` on the same host is served without a login). Needs repo secrets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the `claude-testing` token). Without them the run stops with `out/AUTH-MISSING.txt`. The cookie is redacted from published logs. The public Actions log carries no walk output; never add `tee`/`cat` of results to the workflow. `summary.txt` carries only target names, verdicts, covered seconds and the probe id.
