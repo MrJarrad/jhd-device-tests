@@ -13,11 +13,21 @@ const trace = { request: req, udid, events: [] };
 const T0 = Date.now();
 const log = (e) => { trace.events.push({ t: Date.now() - T0, ...e }); console.log(JSON.stringify({ t: Date.now() - T0, ...e })); };
 
-async function wd(method, path, body) {
-  const r = await fetch(APPIUM + path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json();
-  if (j.value && j.value.error) throw new Error(`${method} ${path}: ${j.value.error}: ${j.value.message}`);
-  return j.value;
+import http from 'node:http';
+// node:http, no client timeout: session creation (WDA launch) can take several minutes on the runner
+function wd(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : null;
+    const r = http.request(APPIUM + path, { method, headers: { 'content-type': 'application/json', ...(data ? { 'content-length': Buffer.byteLength(data) } : {}) } }, (res) => {
+      let t = ''; res.on('data', (c) => (t += c));
+      res.on('end', () => {
+        let j; try { j = JSON.parse(t); } catch (e) { return reject(new Error(`${method} ${path}: bad json ${t.slice(0, 100)}`)); }
+        if (j.value && j.value.error) return reject(new Error(`${method} ${path}: ${j.value.error}: ${j.value.message}`));
+        resolve(j.value);
+      });
+    });
+    r.on('error', reject); if (data) r.write(data); r.end();
+  });
 }
 
 // full-screen simulator frame (includes Safari chrome / toolbar)
@@ -33,7 +43,7 @@ const caps = {
   'appium:deviceName': 'iPhone 16 Pro', 'appium:nativeWebTap': true,
   'appium:safariIgnoreFraudWarning': true, 'appium:wdaLaunchTimeout': 300000,
   'appium:wdaConnectionTimeout': 300000, 'appium:newCommandTimeout': 300, 'appium:webviewConnectTimeout': 60000,
-  'appium:includeSafariInWebviews': true, 'appium:safariInitialUrl': (req.targets ? req.targets[0].url : req.url),
+  'appium:includeSafariInWebviews': true, 'appium:safariInitialUrl': req.targets ? `https://${new URL(req.targets[0].url).host}/cdn-cgi/trace` : req.url, 'appium:wdaStartupRetries': 3, 'appium:wdaStartupRetryInterval': 5000,
 };
 
 let rec;
