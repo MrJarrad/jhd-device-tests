@@ -9,7 +9,7 @@ What one run does: opens each target, replays the tap path with native touches, 
 2. Edit `request.json`, commit, `git push origin run/<name>`. Only `run/**` branches and manual dispatch trigger; main does not.
 3. Wait. Status without auth: `curl -s "https://api.github.com/repos/MrJarrad/jhd-device-tests/actions/runs?per_page=1"` (`status`, `conclusion`, `head_sha`).
 
-Minutes per run: about 6 fixed (simulator boot, Appium and WebDriverAgent start, ffmpeg install) plus about 2.5 per walk. Measured: 1 target x 3 walks = 13.5 min wall, 2 targets x 3 walks = 21 min. Hard limits: walks stop at 17 min of walking, the walk step at 24, the job at 30, so keep targets x walks at 6 or fewer.
+Minutes per run: about 6 fixed (simulator boot, Appium and WebDriverAgent start, ffmpeg install) plus about 2.5 per walk. Measured: 1 target x 3 walks = 13.5 and 18 min wall, 2 targets x 3 walks = 21 min. Hard limits: walks stop at 17 min of walking, the walk step at 24, the job at 30, so keep targets x walks at 6 or fewer.
 
 ## Request format (`request.json`)
 ```json
