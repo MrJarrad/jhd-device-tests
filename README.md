@@ -38,7 +38,7 @@ walk fix w1 held covered=0.0s sync=tap-band build=fp-5
 walk fix w2 covered covered=1.6s sync=tap-band build=fp-2
 target fix held=1 covered=1 no-data=0 of 2
 ```
-- `held`: the watched patch stayed flat after the tap (footer not disturbed). `covered`: it was disturbed for at least 0.2 s within 6 s of the tap; `covered=` is the total seconds disturbed. `no-data`: no sync band for that walk was found in the recording; never guessed, re-run. `sync=` says how the tap was located (see below).
+- `held`: the watched patch stayed flat after the tap (footer not disturbed). `covered`: it was disturbed for at least 0.2 s within 3.5 s of the tap; `covered=` is the total seconds disturbed. `no-data`: no sync band for that walk was found in the recording; never guessed, re-run. `sync=` says how the tap was located (see below).
 - `build=` is the probe id the target actually served on that walk (`probe-timeout` or `none` if the page did not yield one).
 - `outcome` is whether the walk script ran; a `covered` verdict does not fail the run.
 
@@ -52,7 +52,7 @@ Sealed contents: `pixel-verdicts.json` (per walk: verdict, covered seconds, long
 ## How the verdict is made
 - Sync bands. Each measured tap is bracketed by two small bands near the top of the screen, in a column that encodes the walk's ordinal in the run (1..12; columns are fractions of screen width, which Safari's chrome does not move): a magenta band about 1.7 s before the tap (its wall time is logged) and a cyan band painted by the tap itself (page-side `click` listener). The detector (`scripts/pixel-detector.py`, run on the runner with ffmpeg) finds them in `walk.mp4`. The cyan band's first frame is the tap (`sync=tap-band`); if a recorder stall lost it, the tap is placed from the magenta band plus the page's own wall-clock gap between the two (`sync=marker+gap`, a few seconds so drift does not matter). A walk with neither band is `no-data`, never guessed.
 - Why not a clock offset: the recording's clock starts tens of seconds behind the runner's log and is not linear against it (it stretched 24 s within one run). A wall-clock offset and a pulse-count code were both tried and mis-paired or lost walks; a band's column reads the walk straight off the frame (a vertical position code was tried too and shifted with the viewport).
-- From the tap the watched patch is sampled at 20 fps for 6 s. The bands sit clear of the default patch.
+- From the tap the watched patch is sampled at 20 fps for 3.5 s (a transition is about 2.5 s; longer runs into the next walk's page load). The bands sit clear of the default patch.
 - Re-derive by hand: `python3 scripts/pixel-detector.py <decrypted dir>` rebuilds `pixel-verdicts.json` from `trace.json` + `walk.mp4` (needs ffmpeg). At most 12 measured taps per run (targets x walks).
 
 ## Previews behind Cloudflare Access

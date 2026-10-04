@@ -15,7 +15,7 @@ HELD when it stays flat, NO-DATA when no band for that walk is found (never gues
 import json, subprocess, sys, os, statistics
 
 FPS = 20
-WINDOW_S = 6.0
+WINDOW_S = 3.5    # a transition is ~2.5 s; a longer window runs into the next walk's page load
 MIN_RUN_S = 0.2
 FLAT_STD = 5.0          # grey-level stdev of the 12x12 patch below which it counts as flat
 
