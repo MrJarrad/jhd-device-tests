@@ -24,7 +24,19 @@ appium driver install xcuitest >>"$OUT/appium-install.log" 2>&1
 appium --log-no-colors >"$OUT/appium.log" 2>&1 &
 APPIUM_PID=$!
 for i in $(seq 1 30); do curl -sf http://127.0.0.1:4723/status >/dev/null && break; sleep 1; done
+# Cloudflare Access: exchange the service token (repo secrets) for the CF_Authorization cookie. Never printed or published.
+if [ -z "$(node -p "require('./request.json').mechanics?1:''")" ]; then
+  if [ -z "${CF_ACCESS_CLIENT_ID:-}" ] || [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+    echo "ERROR: preview is behind Cloudflare Access; repo secrets CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET are not set" | tee "$OUT/AUTH-MISSING.txt"; kill $APPIUM_PID; exit 3
+  fi
+  URL=$(node -p "require('./request.json').url")
+  CF_AUTH_COOKIE=$(curl -s -D - -o /dev/null -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$URL" | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: CF_Authorization=\([^;]*\).*/\1/p' | head -1)
+  [ -n "$CF_AUTH_COOKIE" ] || { echo "ERROR: Access did not return a CF_Authorization cookie (token rejected?)" | tee "$OUT/AUTH-FAILED.txt"; kill $APPIUM_PID; exit 3; }
+  echo "::add-mask::$CF_AUTH_COOKIE"; export CF_AUTH_COOKIE
+fi
 node scripts/walk.mjs "$UDID" "$OUT" 2>&1 | tee "$OUT/walk.log"
 RC=${PIPESTATUS[0]}
+# scrub any JWT that appium logged
+sed -i.bak -E "s/eyJ[A-Za-z0-9_.-]{20,}/<redacted>/g" "$OUT"/*.log "$OUT"/trace.json 2>/dev/null; rm -f "$OUT"/*.bak
 kill $APPIUM_PID 2>/dev/null || true
 exit $RC

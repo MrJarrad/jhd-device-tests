@@ -19,6 +19,9 @@ jobs:
       - name: Walk in iOS Simulator
         id: walk
         run: scripts/run.sh out
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         continue-on-error: true
       - name: Publish results to results/<ref>-<sha>
         if: always()

@@ -96,14 +96,35 @@ async function watch(prefix, ms, everyMs = 250) {
   }
 }
 
+async function finish() {
+  if (rec) { rec.kill('SIGINT'); await new Promise((r) => rec.on('exit', r)); rec = null; }
+  try { await wd('DELETE', S('')); } catch {}
+  writeFileSync(`${out}/trace.json`, JSON.stringify(trace, null, 1));
+  return 0;
+}
 try {
   rec = spawn('xcrun', ['simctl', 'io', udid, 'recordVideo', '--codec=h264', '--force', `${out}/walk.mp4`], { stdio: 'ignore' });
   await sleep(1500);
   log({ ev: 'record-start' });
+  if (process.env.CF_AUTH_COOKIE) {
+    // previews sit behind Cloudflare Access; /cdn-cgi/trace is served on the same host without a login,
+    // so land there, set the Access cookie for the host, then open the real page.
+    const host = new URL(req.url).host;
+    await wd('POST', S('/url'), { url: `https://${host}/cdn-cgi/trace` });
+    await sleep(1500);
+    await wd('POST', S('/cookie'), { cookie: { name: 'CF_Authorization', value: process.env.CF_AUTH_COOKIE, path: '/', secure: true, httpOnly: true } });
+    log({ ev: 'access-cookie-set', host });
+  }
   await wd('POST', S('/url'), { url: req.url });
   log({ ev: 'navigated', url: req.url });
   await sleep(4000);
   shot('00-load'); log({ ev: 'shot', n: '00-load', sample: await js(SAMPLE) });
+
+  if (req.mechanics) { // public-page check of the driver itself: native tap on a link, then frames
+    await tap('text', req.mechanics.tapText, 'mechanics-tap'); await sleep(3000); shot('01-after-tap');
+    log({ ev: 'after-tap', path: await js('return location.href') });
+    process.exit(0 + (await finish()));
+  }
 
   // lock row 35 path: load -> Next -> Next -> Projects -> card -> Next
   await tap('text', 'Next', 'next-1'); await sleep(3500); shot('01-after-next-1');
@@ -118,7 +139,5 @@ try {
   try { shot('99-error'); } catch {}
   process.exitCode = 1;
 } finally {
-  if (rec) { rec.kill('SIGINT'); await new Promise((r) => rec.on('exit', r)); }
-  try { await wd('DELETE', S('')); } catch {}
-  writeFileSync(`${out}/trace.json`, JSON.stringify(trace, null, 1));
+  await finish();
 }
