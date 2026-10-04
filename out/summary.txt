@@ -1,0 +1,9 @@
+outcome: success
+walk bug w1 no-data build=fp-2
+walk bug w2 held covered=0.0s build=fp-2
+walk bug w3 held covered=0.0s build=fp-2
+walk fix w1 no-data build=fp-6
+walk fix w2 no-data build=fp-6
+walk fix w3 no-data build=fp-6
+target bug held=2 covered=0 no-data=1 of 3
+target fix held=0 covered=0 no-data=3 of 3
