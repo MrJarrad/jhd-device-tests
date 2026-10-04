@@ -26,6 +26,7 @@ function wd(method, path, body) {
         resolve(j.value);
       });
     });
+    if (path !== '/session') r.setTimeout(90000, () => r.destroy(new Error(`${method} ${path}: client timeout 90s`)));
     r.on('error', reject); if (data) r.write(data); r.end();
   });
 }
@@ -138,7 +139,9 @@ function verdictOf(samples) {
   return { samples: s.length, badSamples: bad.length, verdict: bad.length ? 'COVERED/NOT-PERSISTENT' : 'HELD', firstClearSample: firstClear };
 }
 
+const DEADLINE = Date.now() + 17 * 60 * 1000;
 async function oneWalk(t, n) {
+  if (Date.now() > DEADLINE) { log({ ev: 'skipped-deadline', target: t.name, walk: n }); return; }
   const pre = `${t.name}-w${n}`;
   const mark = trace.events.length;
   try {
@@ -162,6 +165,7 @@ async function oneWalk(t, n) {
   const v = { target: t.name, walk: n, ...verdictOf(samples) };
   if (!samples.length) v.verdict = 'NO-DATA';
   verdicts.push(v); log({ ev: 'verdict', ...v });
+  writeFileSync(`${out}/verdicts.json`, JSON.stringify(verdicts, null, 1)); writeFileSync(`${out}/trace.json`, JSON.stringify(trace, null, 1));
 }
 
 try {
