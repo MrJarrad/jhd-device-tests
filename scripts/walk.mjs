@@ -94,11 +94,12 @@ async function tap(kind, key, label) {
 }
 
 // page-side sampler: Appium round trips are too slow (about 7s per tap) to catch a 2.5s transition, so the page samples itself.
-// Sync bands: full-width bands painted at a vertical position that encodes the measured-walk ordinal (1..12), so the detector
-// reads which walk a band belongs to from its position, not from counting or ordering. Magenta = pre-tap marker (known wall
-// time), cyan = painted by the tap itself. Both sit in the top third, clear of the watched patch.
+// Sync bands: a band (half a column wide, centred, so neighbours never bleed) painted in one of 12 columns across the top of the page; the column encodes the measured-walk ordinal
+// (1..12). Columns survive Safari's chrome and viewport scaling (the page is full screen width), so the detector reads which
+// walk a band belongs to from its column. Magenta = pre-tap marker (known wall time), cyan = painted by the tap itself.
+// Both sit in the top fifth, clear of the watched patch.
 const BAND = `window.__dtBand = (color, id, ms) => { const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;left:0;width:100%;height:2%;z-index:2147483647;pointer-events:none;background:' + color + ';top:' + (6 + 2.5 * (id - 1)) + '%';
+  d.style.cssText = 'position:fixed;top:6%;height:4%;width:' + (100 / 24) + '%;z-index:2147483647;pointer-events:none;background:' + color + ';left:' + ((id - 0.75) * 100 / 12) + '%';
   document.body.appendChild(d); setTimeout(() => d.remove(), ms); return Date.now(); };`;
 const INSTALL = `
 const labels = ['Next','Projects','Profile','Email'];

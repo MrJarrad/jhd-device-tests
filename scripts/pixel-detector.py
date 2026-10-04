@@ -3,7 +3,7 @@
 
 usage: pixel-detector.py <outDir>   (reads trace.json + walk.mp4; writes pixel-verdicts.json and pixel-summary.txt)
 
-Sync is automatic and clock-free where it can be: walk.mjs paints full-width bands whose vertical position encodes the
+Sync is automatic and clock-free where it can be: walk.mjs paints bands whose column across the screen width encodes the
 walk's ordinal in the run. A cyan band is painted by the tap itself (its first video frame IS the tap). A magenta band is
 painted shortly before the tap at a logged wall time; if the cyan band was lost to a recorder stall, the tap is placed
 from the magenta band plus the page's wall-clock gap between the two (seconds, so drift is negligible). The recording's
@@ -28,39 +28,16 @@ def load(out):
     return trace, ev
 
 
-def decode(video, region, tmp):
-    x, y, w, h = region
-    fc = (f'[0:v]fps={FPS},split[a][b];'
-          f'[a]crop=iw*0.1:ih:iw*0.45:0,scale=1:{ROWS}:flags=area,format=rgb24[m];'
-          f'[b]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale=12:12,format=gray[p]')
-    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', video, '-filter_complex', fc,
-                    '-map', '[m]', '-f', 'rawvideo', f'{tmp}/band.raw', '-map', '[p]', '-f', 'rawvideo', f'{tmp}/pill.raw'], check=True)
-    band = open(f'{tmp}/band.raw', 'rb').read()
-    pill = open(f'{tmp}/pill.raw', 'rb').read()
-    fs = ROWS * 3
-    magenta, cyan = {}, {}                  # walk ordinal -> frames the band is showing
-    for k in range(len(band) // fs):
-        fr = band[k * fs:(k + 1) * fs]
-        px = [(fr[i], fr[i + 1], fr[i + 2]) for i in range(0, fs, 3)]
-        for flags, store in (([r > 190 and b > 190 and g < 90 for r, g, b in px], magenta),
-                             ([r < 70 and g > 190 and b > 190 for r, g, b in px], cyan)):
-            bid = band_id(flags)
-            if bid: store.setdefault(bid, []).append(k)
-    stds = [statistics.pstdev(pill[i:i + 144]) for i in range(0, len(pill) - 143, 144)]
-    return first_runs(magenta), first_runs(cyan), stds
+N_IDS = 12              # band columns across the screen width; the column is the walk ordinal
+BAND_ROWS = 30          # rows of the band strip (top 5%-30% of the screen)
 
 
-ROWS = 200              # vertical resolution of the band strip (0.5% of screen height per row)
-N_IDS = 12
-
-
-def band_id(row_flags):
-    """Walk ordinal from the vertical position of a band (centre of the flagged rows), or None."""
-    rows = [i for i, f in enumerate(row_flags) if f]
-    if not rows or rows[-1] - rows[0] > 12: return None      # one band is ~4 rows; wider/split = content, not a band
-    y = (sum(rows) / len(rows) + 0.5) / ROWS * 100            # percent of screen height
-    i = round((y - 7) / 2.5) + 1
-    return i if 1 <= i <= N_IDS and abs(y - (7 + 2.5 * (i - 1))) < 1.0 else None
+def band_id(scores):
+    """Walk ordinal from a frame's band strip: the column with the strongest colour score, provided no other column is within
+    60% of it and it is clearly coloured (a photo or text gives weak, spread-out scores). None = no band."""
+    top = max(scores)
+    if top < 100 or sum(1 for v in scores if v >= 0.6 * top) != 1: return None
+    return scores.index(top) + 1
 
 
 def first_runs(store):
@@ -70,6 +47,28 @@ def first_runs(store):
         bursts = 1 + sum(1 for a, b in zip(ks, ks[1:]) if b - a > 1.5 * FPS)
         if bursts == 1: out[bid] = ks[0]
     return out
+
+
+def decode(video, region, tmp):
+    x, y, w, h = region
+    fc = (f'[0:v]fps={FPS},split[a][b];'
+          f'[a]crop=iw:ih*0.25:0:ih*0.05,format=rgb24,scale={N_IDS}:{BAND_ROWS}:flags=area,format=rgb24[m];'
+          f'[b]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale=12:12,format=gray[p]')
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', video, '-filter_complex', fc,
+                    '-map', '[m]', '-f', 'rawvideo', f'{tmp}/band.raw', '-map', '[p]', '-f', 'rawvideo', f'{tmp}/pill.raw'], check=True)
+    band = open(f'{tmp}/band.raw', 'rb').read()
+    pill = open(f'{tmp}/pill.raw', 'rb').read()
+    fs = N_IDS * BAND_ROWS * 3
+    magenta, cyan = {}, {}                  # walk ordinal -> frames the band is showing
+    for k in range(len(band) // fs):
+        fr = band[k * fs:(k + 1) * fs]
+        colour = [[(fr[(r * N_IDS + c) * 3], fr[(r * N_IDS + c) * 3 + 1], fr[(r * N_IDS + c) * 3 + 2]) for r in range(BAND_ROWS)] for c in range(N_IDS)]
+        for score, store in ((lambda r, g, b: min(r, b) - g if r > 150 and b > 150 else 0, magenta),
+                             (lambda r, g, b: min(g, b) - r if g > 150 and b > 150 else 0, cyan)):
+            bid = band_id([max(score(*px) for px in col) for col in colour])
+            if bid: store.setdefault(bid, []).append(k)
+    stds = [statistics.pstdev(pill[i:i + 144]) for i in range(0, len(pill) - 143, 144)]
+    return first_runs(magenta), first_runs(cyan), stds
 
 
 def main(out):
