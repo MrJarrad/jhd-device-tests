@@ -1,7 +1,7 @@
 // Drives real Mobile Safari in a booted iOS Simulator through Appium (XCUITest),
 // taps with native touches, and records the whole simulator screen.
 // Usage: node scripts/walk.mjs <udid> <outDir>   (reads request.json for url + path)
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFileSync, execFile } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 const [udid, out] = process.argv.slice(2);
@@ -92,14 +92,33 @@ async function tap(kind, key, label) {
   await wd('POST', S(`/element/${id}/click`), {});
 }
 
-async function watch(prefix, ms, everyMs = 250) {
-  const end = Date.now() + ms; let i = 0;
-  while (Date.now() < end) {
-    const s = await js(SAMPLE).catch((e) => ({ err: String(e) }));
-    const f = shot(`${prefix}-${String(i).padStart(2, '0')}`);
-    log({ ev: 'sample', prefix, i, sample: s });
-    i++; await sleep(everyMs);
-  }
+// page-side sampler: Appium round trips are too slow (about 7s per tap) to catch a 2.5s transition, so the page samples itself.
+const INSTALL = `
+const labels = ['Next','Projects','Profile','Email'];
+window.__dt = {c: null, s: []};
+document.addEventListener('click', () => { if (window.__dt.c === null) window.__dt.c = performance.now(); }, true);
+const id = setInterval(() => {
+  const pills = [...document.querySelectorAll('a,button')].filter(e => labels.includes(e.textContent.trim())).map(e => {
+    const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return null;
+    const top = document.elementFromPoint(r.x + r.width/2, r.y + r.height/2);
+    return {l: e.textContent.trim(), y: Math.round(r.y), o: +getComputedStyle(e).opacity, on: !!top && (top === e || e.contains(top)),
+      top: top && !(top === e || e.contains(top)) ? (top.tagName + '.' + String(top.className).slice(0, 40)) : null};
+  }).filter(Boolean);
+  window.__dt.s.push({t: Math.round(performance.now()), p: location.pathname, pills});
+  if (window.__dt.s.length > 400) clearInterval(id);
+}, 40);
+return true;`;
+
+// frame loop that runs while the click is in flight (simctl screenshot, jpeg)
+function frameLoop(prefix) {
+  let stop = false; const t0 = Date.now(); const done = (async () => {
+    for (let i = 0; !stop; i++) {
+      const f = `${out}/${prefix}-f${String(i).padStart(2, '0')}-${Date.now() - t0}ms.jpg`;
+      await new Promise((r) => execFile('xcrun', ['simctl', 'io', udid, 'screenshot', '--type=jpeg', f], () => r()));
+      await sleep(50);
+    }
+  })();
+  return async () => { stop = true; await done; };
 }
 
 async function finish() {
@@ -131,12 +150,16 @@ async function openTarget(t) {
   log({ ev: 'access-cookie-set', host });
 }
 
-// row-35 verdict from the watch samples: covered = a footer pill in the DOM but something else on top at its centre
-function verdictOf(samples) {
-  const s = samples.filter((x) => x.pills);
-  const bad = s.filter((x) => x.pills.length < 4 || x.pills.some((p) => !p.onTop || +p.opacity < 1));
-  const firstClear = s.findIndex((x, i) => s.slice(i).every((y) => y.pills.length >= 4 && y.pills.every((p) => p.onTop && +p.opacity >= 1)));
-  return { samples: s.length, badSamples: bad.length, verdict: bad.length ? 'COVERED/NOT-PERSISTENT' : 'HELD', firstClearSample: firstClear };
+// row-35 verdict, from page-side samples after the click: only visible footer pills count (the leaving Home footer is zero-sized).
+// covered = a visible pill with something else at its centre, or fewer than four pills present, or opacity below 1.
+function verdictOf(dt) {
+  const c = dt.c; const s = dt.s.filter((x) => c !== null && x.t >= c && x.t <= c + 3500).map((x) => ({ ...x, rel: x.t - c }));
+  if (!s.length) return { verdict: 'NO-DATA', clickAt: c };
+  const bad = (x) => x.pills.length < 4 || x.pills.some((p) => !p.on || p.o < 1);
+  const b = s.filter(bad);
+  const lastBad = b.length ? b[b.length - 1].rel : null;
+  return { verdict: b.length ? 'COVERED/NOT-PERSISTENT' : 'HELD', samples: s.length, badSamples: b.length, firstBadMs: b[0]?.rel ?? null, lastBadMs: lastBad,
+    coveredBy: [...new Set(b.flatMap((x) => x.pills.map((p) => p.top).filter(Boolean)))].slice(0, 4), minPills: Math.min(...s.map((x) => x.pills.length)) };
 }
 
 const DEADLINE = Date.now() + 17 * 60 * 1000;
@@ -154,17 +177,22 @@ async function oneWalk(t, n) {
     await tap('text', 'Next', 'next-2'); await sleep(3500); shot(`${pre}-02-after-next-2`);
     await tap('text', 'Projects', 'projects'); await sleep(3500); shot(`${pre}-03-home`);
     await tap('href', t.card || req.card, 'card'); await sleep(req.cardWaitMs ?? 3000); shot(`${pre}-04-before-next-3`);
+    await js(INSTALL);
+    const stopFrames = frameLoop(`${pre}-05-row35`);
     await tap('text', 'Next', 'next-3-row35');
-    await watch(`${pre}-05-row35`, 3500);
-    await sleep(1000); shot(`${pre}-06-settled`);
+    await sleep(4500);
+    await stopFrames();
+    const dt = JSON.parse(await js('return JSON.stringify(window.__dt)'));
+    writeFileSync(`${out}/${pre}-row35-samples.json`, JSON.stringify(dt));
+    log({ ev: 'row35-samples', target: t.name, walk: n, clickAt: dt.c, count: dt.s.length });
+    shot(`${pre}-06-settled`);
+    const v = verdictOf(dt);
+    verdicts.push({ target: t.name, walk: n, ...v }); log({ ev: 'verdict', target: t.name, walk: n, ...v });
   } catch (e) {
     log({ ev: 'error', target: t.name, walk: n, message: String(e) });
     try { shot(`${pre}-99-error`); } catch {}
   }
-  const samples = trace.events.slice(mark).filter((e) => e.ev === 'sample' && e.prefix === `${pre}-05-row35`).map((e) => e.sample);
-  const v = { target: t.name, walk: n, ...verdictOf(samples) };
-  if (!samples.length) v.verdict = 'NO-DATA';
-  verdicts.push(v); log({ ev: 'verdict', ...v });
+  if (!verdicts.find((x) => x.target === t.name && x.walk === n)) { const v = { target: t.name, walk: n, verdict: 'NO-DATA' }; verdicts.push(v); log({ ev: 'verdict', ...v }); }
   writeFileSync(`${out}/verdicts.json`, JSON.stringify(verdicts, null, 1)); writeFileSync(`${out}/trace.json`, JSON.stringify(trace, null, 1));
 }
 
