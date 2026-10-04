@@ -1,0 +1,5 @@
+outcome: success
+walk fix w1 held covered=0.0s sync=tap-band build=fp-6
+walk fix w2 held covered=0.0s sync=tap-band build=fp-6
+walk fix w3 held covered=0.0s sync=tap-band build=fp-6
+target fix held=3 covered=0 no-data=0 of 3
