@@ -32,6 +32,7 @@ jobs:
           brew install age >/dev/null 2>&1
           mkdir -p sealed
           tar -C out -cf - . | age -R age-public-key.txt -o sealed/results.tar.age
+          if [ $(stat -f%z sealed/results.tar.age) -gt 90000000 ]; then split -b 60m sealed/results.tar.age sealed/results.tar.age.part- && rm sealed/results.tar.age; fi  # join: cat results.tar.age.part-* > results.tar.age
           echo "outcome: ${{ steps.walk.outcome }}" > sealed/summary.txt
           rm -rf out; mv sealed out
           git config user.name "device-walk"; git config user.email "device-walk@users.noreply.github.com"

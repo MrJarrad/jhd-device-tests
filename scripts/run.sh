@@ -37,5 +37,7 @@ RC=$?
 echo "walk exit code: $RC"
 # scrub any JWT that appium logged
 sed -i.bak -E "s/eyJ[A-Za-z0-9_.-]{20,}/<redacted>/g" "$OUT"/*.log "$OUT"/trace.json 2>/dev/null; rm -f "$OUT"/*.bak
+# frames to jpeg (publishing limit: a results branch file must stay under 100MB)
+for f in "$OUT"/*.png; do [ -f "$f" ] && sips -s format jpeg -s formatOptions 72 "$f" --out "${f%.png}.jpg" >/dev/null 2>&1 && rm -f "$f"; done
 kill $APPIUM_PID 2>/dev/null || true
 exit $RC
