@@ -16,7 +16,8 @@ xcrun simctl boot "$UDID" || true
 xcrun simctl bootstatus "$UDID" -b
 open -a Simulator --args -CurrentDeviceUDID "$UDID" || true
 sleep 5
-xcrun simctl openurl "$UDID" about:blank   # make sure MobileSafari is launched and foreground
+xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebKitDeveloperExtrasEnabledPreferenceKey -bool true || true
+xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebInspectorEnabled -bool true || true
 sleep 5
 npm i -g appium@latest >"$OUT/appium-install.log" 2>&1
 appium driver install xcuitest >>"$OUT/appium-install.log" 2>&1

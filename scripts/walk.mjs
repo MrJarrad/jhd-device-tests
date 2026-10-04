@@ -32,7 +32,8 @@ const caps = {
   'appium:automationName': 'XCUITest', 'appium:udid': udid,
   'appium:deviceName': 'iPhone 16 Pro', 'appium:nativeWebTap': true,
   'appium:safariIgnoreFraudWarning': true, 'appium:wdaLaunchTimeout': 300000,
-  'appium:wdaConnectionTimeout': 300000, 'appium:newCommandTimeout': 300,
+  'appium:wdaConnectionTimeout': 300000, 'appium:newCommandTimeout': 300, 'appium:webviewConnectTimeout': 60000,
+  'appium:includeSafariInWebviews': true, 'appium:safariInitialUrl': req.url,
 };
 
 let rec;
