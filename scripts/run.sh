@@ -19,11 +19,11 @@ sleep 5
 xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebKitDeveloperExtrasEnabledPreferenceKey -bool true || true
 xcrun simctl spawn "$UDID" defaults write com.apple.mobilesafari WebInspectorEnabled -bool true || true
 sleep 5
-brew install ffmpeg >"$OUT/ffmpeg-install.log" 2>&1 &
-FFMPEG_PID=$!
-npm i -g appium@latest >"$OUT/appium-install.log" 2>&1
-appium driver install xcuitest >>"$OUT/appium-install.log" 2>&1
-appium --log-no-colors >"$OUT/appium.log" 2>&1 &
+# tools were installed by scripts/install.sh in a step without secrets
+for t in appium ffmpeg; do command -v $t >/dev/null || { echo "ERROR: $t missing (install step did not run)"; exit 4; }; done
+ffmpeg -version | head -1 >> "$OUT/env.txt"; appium --version >> "$OUT/env.txt"
+# appium is third-party code: start it without the Access secrets; only walk.mjs gets them
+env -u CF_ACCESS_CLIENT_ID -u CF_ACCESS_CLIENT_SECRET appium --log-no-colors >"$OUT/appium.log" 2>&1 &
 APPIUM_PID=$!
 for i in $(seq 1 30); do curl -sf http://127.0.0.1:4723/status >/dev/null && break; sleep 1; done
 # Cloudflare Access: exchange the service token (repo secrets) for the CF_Authorization cookie. Never printed or published.
@@ -36,11 +36,11 @@ fi
 # walk output stays in the file (published encrypted); the public Actions log gets no page text
 node scripts/walk.mjs "$UDID" "$OUT" >"$OUT/walk.log" 2>&1
 RC=$?
+unset CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET   # nothing after the walk needs them
 echo "walk exit code: $RC"
 # scrub any JWT that appium logged
 sed -i.bak -E "s/eyJ[A-Za-z0-9_.-]{20,}/<redacted>/g" "$OUT"/*.log "$OUT"/trace.json 2>/dev/null; rm -f "$OUT"/*.bak
 # pixel verdict from the recording (automatic sync marker); output stays in the results dir, summary lines are non-sensitive
-wait $FFMPEG_PID 2>/dev/null
 python3 scripts/pixel-detector.py "$OUT" >"$OUT/pixel-detector.log" 2>&1 || echo "pixel detector failed (see sealed pixel-detector.log)"
 # frames to jpeg (publishing limit: a results branch file must stay under 100MB)
 for f in "$OUT"/*.png; do [ -f "$f" ] && sips -s format jpeg -s formatOptions 72 "$f" --out "${f%.png}.jpg" >/dev/null 2>&1 && rm -f "$f"; done

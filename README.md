@@ -6,12 +6,13 @@ What one run does: opens each target, replays the tap path with native touches, 
 
 ## Trigger (from a cloud lane, no GitHub API token)
 1. Branch from main as `run/<name>`.
-2. Edit `request.json`, commit, `git push origin run/<name>`. Only `run/**` branches and manual dispatch trigger; main does not.
+2. Write the request as plain JSON (format below) outside the repo, seal it with the public key, commit, `git push origin run/<name>`:
+   `age -R request-public-key.txt -a -o request.age request.json` (`apt-get install -y age`). The request holds preview hostnames, so only the sealed `request.age` is ever in git (`request.json` is gitignored). The runner decrypts it with the repo secret `DEVICE_REQUEST_KEY`; a request that will not decrypt fails the run early. Only `run/**` branches and manual dispatch trigger; main does not. Never put a preview hostname in a commit message, branch name or `name`.
 3. Wait. Status without auth: `curl -s "https://api.github.com/repos/MrJarrad/jhd-device-tests/actions/runs?per_page=1"` (`status`, `conclusion`, `head_sha`).
 
 Minutes per run: about 6 fixed (simulator boot, Appium and WebDriverAgent start, ffmpeg install) plus about 2.5 per walk. Measured: 1 target x 3 walks = 13.5 and 18 min wall, 2 targets x 3 walks = 21 min. Hard limits: walks stop at 17 min of walking, the walk step at 24, the job at 30, so keep targets x walks at 6 or fewer.
 
-## Request format (`request.json`)
+## Request format (plaintext `request.json`, sealed to `request.age`)
 ```json
 {
   "targets": [ { "name": "fix", "url": "https://<preview host>/projects/yardsale", "card": "/projects/yardsale" } ],
@@ -23,7 +24,7 @@ Minutes per run: about 6 fixed (simulator boot, Appium and WebDriverAgent start,
   "pixelRegion": { "x": 0.517, "y": 0.785, "w": 0.03, "h": 0.03 }
 }
 ```
-- `targets`: one entry per build to compare; `name` labels the verdict lines (public, keep it free of secrets), `url` is the page each walk starts from, `card` is the href the default path taps on Home.
+- `targets`: one entry per build to compare; `name` labels the verdict lines (public, keep it free of secrets and hostnames), `url` is the page each walk starts from, `card` is the href the default path taps on Home.
 - `walks`: repeats per target (transitions are timing sensitive; use 3).
 - `path` (optional): ordered tap steps, each `tapText` (exact visible text of a link or button) or `tapHref` (a link by href), with optional `waitMs` after it (default 3500). Exactly one step carries `"measure": true`: the tap whose aftermath is judged. Omitted, the path is the footer row-35 path: Next, Next, Projects, card (`card`), Next (measured).
 - `probe`: regex for the build id to log (searched in the page's script files); default `"fp-\d+"`. The matched text is logged per walk as `build=`.
@@ -56,7 +57,10 @@ Sealed contents: `pixel-verdicts.json` (per walk: verdict, covered seconds, long
 - Re-derive by hand: `python3 scripts/pixel-detector.py <decrypted dir>` rebuilds `pixel-verdicts.json` from `trace.json` + `walk.mp4` (needs ffmpeg). At most 12 measured taps per run (targets x walks).
 
 ## Previews behind Cloudflare Access
-The runner exchanges the service token for the `CF_Authorization` cookie per host and sets it in Safari (`/cdn-cgi/trace` on the same host is served without a login). Needs repo secrets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the `claude-testing` token). Without them the run stops with `out/AUTH-MISSING.txt`. The cookie is redacted from published logs. The public Actions log carries no walk output; never add `tee`/`cat` of results to the workflow. `summary.txt` carries only target names, verdicts, covered seconds and the probe id.
+The runner exchanges the service token for the `CF_Authorization` cookie per host and sets it in Safari (`/cdn-cgi/trace` on the same host is served without a login). Needs repo secrets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` (the `claude-testing` token) and `DEVICE_REQUEST_KEY` (private half of `request-public-key.txt`; vault `estate/device-tests/request-private-key.txt`). Without them the run stops with `out/AUTH-MISSING.txt`. The cookie is redacted from published logs. The public Actions log carries no walk output; never add `tee`/`cat` of results to the workflow. `summary.txt` carries only target names, verdicts, covered seconds and the probe id.
 
 ## What it does not show
 Simulator, not a phone: no real GPU compositing, finger feel or scroll physics, no hardware. The runner image decides the iOS runtimes available. The verdict is only as good as the watched region: it sees disturbance in that patch, not the whole screen.
+
+## Secrets and third-party code
+Installs (`scripts/install.sh`: Homebrew `age` and `ffmpeg`, `appium@3.8.0`, driver `xcuitest@12.15.0`, the versions that ran green) run in a workflow step with no secrets. The request key exists only in the decrypt step. The Access token reaches only the walk step; Appium is started with it removed from its environment, so only `scripts/walk.mjs` holds it. ffmpeg is a Homebrew bottle (checksummed by brew, not version-pinned) and only ever reads the recording; its version is written to `env.txt`. Bump the pins deliberately, with a proving run.

@@ -1,10 +1,10 @@
 name: device-walk
-# Trigger: push a branch named run/<anything> (edit request.json on it), or workflow_dispatch. Main is not a trigger.
+# Trigger: push a branch named run/<anything> (replace request.age on it, sealed to request-public-key.txt), or workflow_dispatch. Main is not a trigger.
 # Results are committed to branch results/<branch-name> so anyone can `git fetch` them.
 on:
   push:
     branches: ['run/**']
-    paths: ['request.json', 'scripts/**', '.github/workflows/device-walk.yml']
+    paths: ['request.age', 'scripts/**', '.github/workflows/device-walk.yml']
   workflow_dispatch:
 permissions:
   contents: write
@@ -16,6 +16,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      - name: Install tools (no secrets in this step)
+        run: scripts/install.sh
+      - name: Decrypt request
+        env:
+          DEVICE_REQUEST_KEY: ${{ secrets.DEVICE_REQUEST_KEY }}
+        run: |
+          if [ -z "$DEVICE_REQUEST_KEY" ]; then echo "DEVICE_REQUEST_KEY secret is not set"; exit 3; fi
+          umask 077; printf '%s\n' "$DEVICE_REQUEST_KEY" > "$RUNNER_TEMP/req.key"
+          age -d -i "$RUNNER_TEMP/req.key" -o request.json request.age || { echo "request.age did not decrypt"; rm -f "$RUNNER_TEMP/req.key"; exit 3; }
+          rm -f "$RUNNER_TEMP/req.key"
       - name: Walk in iOS Simulator
         id: walk
         run: scripts/run.sh out
@@ -30,7 +40,7 @@ jobs:
           BR="results/${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
           mkdir -p out
           # Previews are behind Access: encrypt everything to the public key before it leaves the runner.
-          brew install age >/dev/null 2>&1
+          command -v age >/dev/null || brew install age >/dev/null 2>&1
           mkdir -p sealed
           tar -C out -cf - . | age -R age-public-key.txt -o sealed/results.tar.age
           if [ $(stat -f%z sealed/results.tar.age) -gt 90000000 ]; then split -b 60m sealed/results.tar.age sealed/results.tar.age.part- && rm sealed/results.tar.age; fi  # join: cat results.tar.age.part-* > results.tar.age
