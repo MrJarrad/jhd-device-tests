@@ -56,13 +56,15 @@ log({ ev: 'session', caps: sess.capabilities });
 // pill = footer action / link by exact visible text; card = project link by href
 const FIND = `
 const [kind, key] = arguments;
-let el;
-if (kind === 'href') el = document.querySelector('a[href="' + key + '"]');
-else el = [...document.querySelectorAll('a,button')].find(e => e.textContent.trim() === key && e.getBoundingClientRect().width > 0);
+document.querySelectorAll('[data-dt]').forEach(e => e.removeAttribute('data-dt'));
+const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+const list = kind === 'href' ? [...document.querySelectorAll('a[href="' + key + '"]')] : [...document.querySelectorAll('a,button')].filter(e => e.textContent.trim() === key);
+const el = list.find(vis);
 if (!el) return null;
-if (kind === 'href') el.scrollIntoView({block:'center'});
+if (kind === 'href') el.scrollIntoView({block:'center', inline:'center'});
+el.setAttribute('data-dt', '1');
 const r = el.getBoundingClientRect();
-return {x: r.x + r.width/2, y: r.y + r.height/2, w: r.width, h: r.height};`;
+return {x: r.x + r.width/2, y: r.y + r.height/2, w: r.width, h: r.height, n: list.length};`;
 
 const SAMPLE = `
 const labels = ['Next','Projects','Profile','Email'];
@@ -80,19 +82,10 @@ return {path: location.pathname, innerH: innerHeight, vvH: vv && vv.height, vvTo
 async function tap(kind, key, label) {
   const found = await js(FIND, [kind, key]);
   if (!found) throw new Error(`tap target not found: ${kind} ${key}`);
-  await sleep(150);
-  const f2 = await js(FIND, [kind, key]); // re-read after scrollIntoView settles
-  const els = await wd('POST', S('/elements'), { using: 'css selector', value: kind === 'href' ? `a[href="${key}"]` : 'a,button' });
-  let target;
-  if (kind === 'href') target = els[0];
-  else {
-    for (const e of els) {
-      const id = Object.values(e)[0];
-      const txt = (await wd('GET', S(`/element/${id}/text`))).trim();
-      const vis = await wd('GET', S(`/element/${id}/displayed`));
-      if (txt === key && vis) { target = e; break; }
-    }
-  }
+  await sleep(300);
+  const f2 = await js(FIND, [kind, key]); // re-read (and re-mark) after scrollIntoView settles
+  if (!f2) throw new Error(`tap target vanished: ${kind} ${key}`);
+  const target = await wd('POST', S('/element'), { using: 'css selector', value: '[data-dt]' });
   const id = Object.values(target)[0];
   log({ ev: 'tap', label, rect: f2 });
   await wd('POST', S(`/element/${id}/click`), {});
