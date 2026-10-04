@@ -177,6 +177,10 @@ async function oneWalk(t, n) {
     await tap('text', 'Next', 'next-2'); await sleep(3500); shot(`${pre}-02-after-next-2`);
     await tap('text', 'Projects', 'projects'); await sleep(3500); shot(`${pre}-03-home`);
     await tap('href', t.card || req.card, 'card'); await sleep(req.cardWaitMs ?? 3000); shot(`${pre}-04-before-next-3`);
+    const build = await wd('POST', S('/execute/async'), { args: [], script: `const done = arguments[arguments.length - 1];
+      Promise.all([...document.scripts].map(x => x.src).filter(Boolean).map(u => fetch(u).then(r => r.text()).then(t => (t.match(/"fp-\\d+"/) || [])[0]).catch(() => null)))
+                .then(a => done(a.find(Boolean) || 'none'));` }).catch((e) => 'probe-id-error ' + e.message);
+    log({ ev: 'build-id', target: t.name, walk: n, build });
     await js(INSTALL);
     const stopFrames = frameLoop(`${pre}-05-row35`);
     await tap('text', 'Next', 'next-3-row35');
