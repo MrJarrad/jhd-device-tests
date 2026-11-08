@@ -1,0 +1,9 @@
+outcome: success
+walk lift w1 covered covered=3.5s sync=tap-band build=none
+walk lift w2 covered covered=3.5s sync=tap-band build=none
+walk lift w3 covered covered=3.5s sync=tap-band build=none
+walk nogradual w1 no-data build=none
+walk nogradual w2 covered covered=3.15s sync=tap-band build=none
+walk nogradual w3 covered covered=3.5s sync=tap-band build=none
+target lift held=0 covered=3 no-data=0 of 3
+target nogradual held=0 covered=2 no-data=1 of 3
