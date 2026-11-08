@@ -1,0 +1,9 @@
+outcome: success
+walk control w1 covered covered=3.5s sync=tap-band build=none
+walk control w2 covered covered=3.5s sync=tap-band build=none
+walk control w3 covered covered=3.5s sync=tap-band build=none
+walk noblur w1 covered covered=3.25s sync=tap-band build=none
+walk noblur w2 covered covered=3.35s sync=tap-band build=none
+walk noblur w3 covered covered=3.5s sync=tap-band build=none
+target control held=0 covered=3 no-data=0 of 3
+target noblur held=0 covered=3 no-data=0 of 3
